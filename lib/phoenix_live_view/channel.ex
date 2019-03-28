@@ -49,6 +49,19 @@ defmodule Phoenix.LiveView.Channel do
   def handle_info(%Message{topic: topic, event: "event"} = msg, %{topic: topic} = state) do
     %{"value" => raw_val, "event" => event, "type" => type} = msg.payload
     val = decode(type, raw_val)
+
+    val =
+      case msg.payload do
+        %{"file_ref" => file_ref, "upload_channel" => topic} ->
+          # TODO: not this
+          {_, [_ | {%{channels: %{^topic => {pid, _ref}}}, _}], _} = :sys.get_state(state.transport_pid)
+           {:ok, path} = GenServer.call(pid, {:get_file, file_ref})
+
+           # TODO: find/replace the file ref (__PHX_FILE__)
+           put_in(val, ["user", "avatar", "path"], path)
+        _ -> val
+      end
+
     result = view_module(state).handle_event(event, val, state.socket)
     handle_result(state, {:event, msg.ref}, state.socket, result)
   end
