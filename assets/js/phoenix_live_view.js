@@ -661,7 +661,10 @@ export class View {
 
   getSession(){ return Session.parse(this.el).token }
 
-  getStatic(){ return this.el.getAttribute(PHX_STATIC) }
+  getStatic(){
+    let val = this.el.getAttribute(PHX_STATIC)
+    return val === "" ? null : val
+  }
 
   destroy(callback = function(){}){
     if(this.hasGracefullyClosed()){
