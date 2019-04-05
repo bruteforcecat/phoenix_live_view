@@ -5,7 +5,9 @@ defmodule Phoenix.LiveView.LiveViewTest do
   alias Phoenix.LiveViewTest.{Endpoint, ThermostatLive, ClockLive, ClockControlsLive}
 
   def session(view) do
-    {:ok, session} = Phoenix.LiveView.View.verify_session(view.endpoint, view.token)
+    {:ok, session} =
+      Phoenix.LiveView.View.verify_session(view.endpoint, view.session_token, view.static_token)
+
     session
   end
 
@@ -41,7 +43,7 @@ defmodule Phoenix.LiveView.LiveViewTest do
 
     test "live render with bad session", %{view: view} do
       assert {:error, %{reason: "badsession"}} =
-               mount(%Phoenix.LiveViewTest.View{view | token: "bad"})
+               mount(%Phoenix.LiveViewTest.View{view | session_token: "bad"})
     end
 
     test "render_submit", %{view: view} do
@@ -81,14 +83,24 @@ defmodule Phoenix.LiveView.LiveViewTest do
 
       {:ok, view, mount_html} = mount(view)
 
-      assert static_html =~ ~r/<span[^>]*data-phx-view=\"Phoenix.LiveViewTest.ThermostatLive\"[^>]*style=\"thermo-flex&lt;script&gt;\">/
+      assert static_html =~
+               ~r/<span[^>]*data-phx-view=\"Phoenix.LiveViewTest.ThermostatLive\"[^>]*style=\"thermo-flex&lt;script&gt;\">/
+
       assert static_html =~ ~r/<\/span>/
-      assert static_html =~ ~r/<p[^>]*data-phx-view=\"Phoenix.LiveViewTest.ClockLive\"[^>]*style=\"clock-flex">/
+
+      assert static_html =~
+               ~r/<p[^>]*data-phx-view=\"Phoenix.LiveViewTest.ClockLive\"[^>]*style=\"clock-flex">/
+
       assert static_html =~ ~r/<\/p>/
 
-      assert mount_html =~ ~r/<p[^>]*data-phx-view=\"Phoenix.LiveViewTest.ClockLive\"[^>]*style=\"clock-flex">/
+      assert mount_html =~
+               ~r/<p[^>]*data-phx-view=\"Phoenix.LiveViewTest.ClockLive\"[^>]*style=\"clock-flex">/
+
       assert mount_html =~ ~r/<\/p>/
-      assert render(view) =~ ~r/<p[^>]*data-phx-view=\"Phoenix.LiveViewTest.ClockLive\"[^>]*style=\"clock-flex">/
+
+      assert render(view) =~
+               ~r/<p[^>]*data-phx-view=\"Phoenix.LiveViewTest.ClockLive\"[^>]*style=\"clock-flex">/
+
       assert render(view) =~ ~r/<\/p>/
     end
   end
@@ -245,10 +257,10 @@ defmodule Phoenix.LiveView.LiveViewTest do
 
     test "duplicate nested children raises" do
       assert ExUnit.CaptureLog.capture_log(fn ->
-        pid = spawn(fn -> mount(Endpoint, SameChildLive, session: %{dup: true}) end)
-        Process.monitor(pid)
-        assert_receive {:DOWN, _ref, :process, ^pid, _}
-      end) =~ "unable to start child Phoenix.LiveViewTest.ClockLive under duplicate name"
+               pid = spawn(fn -> mount(Endpoint, SameChildLive, session: %{dup: true}) end)
+               Process.monitor(pid)
+               assert_receive {:DOWN, _ref, :process, ^pid, _}
+             end) =~ "unable to start child Phoenix.LiveViewTest.ClockLive under duplicate name"
     end
 
     test "parent graceful exit removes children" do

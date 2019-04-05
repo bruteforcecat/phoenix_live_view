@@ -9,12 +9,14 @@ defmodule Phoenix.LiveView.Channel do
 
   alias Phoenix.Socket.Message
 
+  @prefix :phoenix
+
   def start_link({auth_payload, from, phx_socket}) do
     GenServer.start_link(__MODULE__, {auth_payload, from, phx_socket})
   end
 
   def ping(pid) do
-    GenServer.call(pid, {:phoenix_live_view, :ping})
+    GenServer.call(pid, {@prefix, :ping})
   end
 
   @impl true
@@ -39,6 +41,21 @@ defmodule Phoenix.LiveView.Channel do
     {:stop, reason, state}
   end
 
+  def handle_info(
+        {:DOWN, _ref, :process, maybe_child_pid, _reason} = msg,
+        %{socket: socket} = state
+      ) do
+    case Map.fetch(state.children_pids, maybe_child_pid) do
+      {:ok, id} ->
+        new_pids = Map.delete(state.children_pids, maybe_child_pid)
+        new_ids = Map.delete(state.children_ids, id)
+        {:noreply, %{state | children_pids: new_pids, children_ids: new_ids}}
+
+      :error ->
+        handle_result(state, :info, socket, view_module(state).handle_info(msg, socket))
+    end
+  end
+
   def handle_info(%Message{topic: topic, event: "phx_leave"} = msg, %{topic: topic} = state) do
     reply(state, msg.ref, :ok, %{})
 
@@ -57,8 +74,14 @@ defmodule Phoenix.LiveView.Channel do
   end
 
   @impl true
-  def handle_call({:phoenix_live_view, :ping}, _from, state) do
+  def handle_call({@prefix, :ping}, _from, state) do
     {:reply, :ok, state}
+  end
+
+  def handle_call({@prefix, :child_mount, child_pid, view, id, assigned_new}, _from, state) do
+    IO.inspect({:child_mount, view, id, assigned_new})
+    assigns = Map.take(state.socket.assigns, assigned_new)
+    {:reply, {:ok, assigns}, put_child(state, child_pid, view, id)}
   end
 
   def handle_call(msg, from, %{socket: socket} = state) do
@@ -98,6 +121,7 @@ defmodule Phoenix.LiveView.Channel do
   defp handle_result(state, :call, %Socket{} = socket, {:reply, reply, %Socket{} = socket}) do
     {:reply, reply, state}
   end
+
   defp handle_result(state, _kind, %Socket{} = socket, {:noreply, %Socket{} = socket}) do
     {:noreply, state}
   end
@@ -106,12 +130,18 @@ defmodule Phoenix.LiveView.Channel do
     {new_state, rendered} = rerender(%{state | socket: new_socket})
     {:reply, reply, push_render(new_state, :call, rendered)}
   end
+
   defp handle_result(state, kind, %Socket{} = _before, {:noreply, %Socket{} = new_socket}) do
     {new_state, rendered} = rerender(%{state | socket: new_socket})
     {:noreply, push_render(new_state, kind, rendered)}
   end
 
-  defp handle_result(state, _kind, _socket, {:stop, %Socket{stopped: {:redirect, %{to: to}}} = new_socket}) do
+  defp handle_result(
+         state,
+         _kind,
+         _socket,
+         {:stop, %Socket{stopped: {:redirect, %{to: to}}} = new_socket}
+       ) do
     new_state = push_redirect(%{state | socket: new_socket}, to, View.get_flash(new_socket))
     send(state.transport_pid, {:socket_close, self(), :redirect})
 
@@ -177,6 +207,7 @@ defmodule Phoenix.LiveView.Channel do
 
   defp log_mount(%Phoenix.Socket{private: %{log_join: false}}, _), do: :noop
   defp log_mount(%Phoenix.Socket{private: %{log_join: level}}, func), do: Logger.log(level, func)
+  defp log_mount(%Phoenix.Socket{private: %{}}, func), do: Logger.log(:debug, func)
 
   defp reply(state, ref, status, payload) do
     reply_ref = {state.transport_pid, state.serializer, state.topic, ref, state.join_ref}
@@ -191,10 +222,10 @@ defmodule Phoenix.LiveView.Channel do
 
   ## Join
 
-  defp join({%{"session" => session_token}, from, phx_socket}) do
-    case View.verify_session(phx_socket.endpoint, session_token) do
-      {:ok, %{id: id, view: view, parent_pid: parent, session: user_session}} ->
-        verified_join(view, id, parent, user_session, from, phx_socket)
+  defp join({%{"session" => session_token} = params, from, phx_socket}) do
+    case View.verify_session(phx_socket.endpoint, session_token, params["static"]) do
+      {:ok, %{id: id, view: view, parent_pid: parent, session: user_session, assigned_new: new}} ->
+        verified_join(view, id, parent, new, user_session, from, phx_socket)
 
       {:error, reason} ->
         log_mount(phx_socket, fn ->
@@ -207,28 +238,40 @@ defmodule Phoenix.LiveView.Channel do
   end
 
   defp join({%{}, from, phx_socket}) do
-    log_mount(phx_socket, fn -> "Mounting #{phx_socket.topic} failed because no session was provided" end)
+    log_mount(phx_socket, fn ->
+      "Mounting #{phx_socket.topic} failed because no session was provided"
+    end)
+
     GenServer.reply(from, %{reason: "nosession"})
     :ignore
   end
 
-  defp verified_join(view, id, parent, user_session, from, %Phoenix.Socket{} = phx_socket) do
+  defp verified_join(
+         view,
+         id,
+         parent,
+         assigned_new,
+         user_session,
+         from,
+         %Phoenix.Socket{} = phx_socket
+       ) do
     Process.monitor(phx_socket.transport_pid)
-    register!(view, id, parent)
-    if parent, do: Process.monitor(parent)
 
     lv_socket =
-      View.build_socket(phx_socket.endpoint, %{
+      phx_socket.endpoint
+      |> View.build_socket(%{
         connected?: true,
         parent_pid: parent,
         view: view,
-        id: id,
-      })
+        id: id
+      }, %{})
+      |> monitor_parent(assigned_new)
 
     case view.mount(user_session, lv_socket) do
       {:ok, %Socket{} = lv_socket} ->
         {state, rendered} =
           lv_socket
+          |> post_mount_prune()
           |> build_state(phx_socket, user_session)
           |> rerender()
 
@@ -255,25 +298,53 @@ defmodule Phoenix.LiveView.Channel do
       serializer: phx_socket.serializer,
       topic: phx_socket.topic,
       transport_pid: phx_socket.transport_pid,
-      join_ref: phx_socket.join_ref
+      join_ref: phx_socket.join_ref,
+      children_pids: %{},
+      children_ids: %{}
     }
   end
 
-  defp register!(view, id, parent) do
-    case Registry.register(Phoenix.LiveView.Registry, id, %{}) do
-      {:ok, _owner} -> :ok
-      {:error, {:already_registered, pid}} ->
+  defp monitor_parent(%Socket{parent_pid: nil} = socket, _assigned_new), do: socket
+
+  defp monitor_parent(%Socket{parent_pid: parent, id: id} = socket, assigned_new) do
+    _ref = Process.monitor(parent)
+
+    {:ok, values} =
+      GenServer.call(parent, {@prefix, :child_mount, self(), socket.view, id, assigned_new})
+
+    put_parent_assigns(socket, values)
+  end
+
+  defp put_child(%{socket: %Socket{view: parent}} = state, child_pid, view, id) do
+    case Map.fetch(state.children_ids, id) do
+      {:ok, existing_pid} ->
         raise RuntimeError, """
         unable to start child #{inspect(view)} under duplicate name for parent #{inspect(parent)}.
+        A child LiveView #{inspect(existing_pid)} is already running under the ID #{id}.
 
-        A child LiveView #{inspect(pid)} is already running under the ID #{id}. (#{inspect(pid)})
         To render multiple LiveView children of the same module, a
         child_id option must be provided per live_render call. For example:
 
             <%= live_render @socket, #{inspect(view)}, child_id: 1 %>
             <%= live_render @socket, #{inspect(view)}, child_id: 2 %>
-
         """
+
+      :error ->
+        _ref = Process.monitor(child_pid)
+
+        %{
+          state
+          | children_pids: Map.put(state.children_pids, child_pid, id),
+            children_ids: Map.put(state.children_ids, id, child_pid)
+        }
     end
+  end
+
+  defp post_mount_prune(%Socket{} = socket) do
+    %Socket{socket | private: Map.delete(socket.private, :parent_assigns)}
+  end
+
+  defp put_parent_assigns(socket, values) do
+    %Socket{socket | private: Map.put(socket.private, :parent_assigns, values)}
   end
 end

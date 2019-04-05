@@ -31,9 +31,12 @@ defmodule Phoenix.LiveViewTest.DOM do
   defp dynamic_to_buffer(str, acc) when is_binary(str), do: [str | acc]
 
   def find_sessions(html) do
-    ~r/data-phx-session="([^"]+)/
+    ~r/<[^>]+data-phx-session="([^"]+)[^>]+data-phx-static="([^"]+)|<[^>]+data-phx-session="([^"]+)/
     |> Regex.scan(html, capture: :all_but_first)
-    |> Enum.map(fn [session] -> session end)
+    |> Enum.map(fn
+      ["", "", session] -> {session, nil}
+      [session, static] -> {session, static}
+    end)
   end
 
   def insert_session(root_html, session, child_html) do

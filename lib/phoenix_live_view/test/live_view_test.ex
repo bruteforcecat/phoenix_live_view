@@ -155,8 +155,8 @@ defmodule Phoenix.LiveViewTest do
           |> IO.iodata_to_binary()
 
         case DOM.find_sessions(html) do
-          [token | _] ->
-            {:ok, View.build(token: token, module: view_module, endpoint: endpoint), html}
+          [{session_token, nil} | _] ->
+            {:ok, View.build(session_token: session_token, module: view_module, endpoint: endpoint), html}
 
           [] ->
             {:error, :nosession}

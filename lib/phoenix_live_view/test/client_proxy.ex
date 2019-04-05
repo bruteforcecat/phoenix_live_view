@@ -37,7 +37,7 @@ defmodule Phoenix.LiveViewTest.ClientProxy do
         new_state =
           state
           |> put_view(root_view, pid, rendered)
-          |> detect_added_or_removed_children(root_view.token)
+          |> detect_added_or_removed_children(root_view.session_token)
 
         send_caller(state, {:mounted, pid, DOM.render_diff(rendered)})
 
@@ -89,9 +89,10 @@ defmodule Phoenix.LiveViewTest.ClientProxy do
       join_ref: state.join_ref
     }
 
+    params = %{"session" => view.session_token, "static" => view.static_token}
     spec =
       Supervisor.child_spec(
-        {Phoenix.LiveView.Channel, {%{"session" => view.token}, {self(), ref}, socket}},
+        {Phoenix.LiveView.Channel, {params, {self(), ref}, socket}},
         restart: :temporary
       )
 
@@ -170,7 +171,7 @@ defmodule Phoenix.LiveViewTest.ClientProxy do
   def handle_call({:stop, %View{topic: topic}}, _from, state) do
     case fetch_view_by_topic(state, topic) do
       {:ok, view} ->
-        {:reply, :ok, drop_view_by_session(state, view.token, :stop)}
+        {:reply, :ok, drop_view_by_session(state, view.session_token, :stop)}
 
       :error ->
         {:reply, :ok, state}
@@ -251,7 +252,7 @@ defmodule Phoenix.LiveViewTest.ClientProxy do
   end
 
   defp verify_session(%View{} = view) do
-    Phoenix.LiveView.View.verify_session(view.endpoint, view.token)
+    Phoenix.LiveView.View.verify_session(view.endpoint, view.session_token, view.static_token)
   end
 
   defp put_view(state, %View{} = view, pid, rendered) do
@@ -263,7 +264,7 @@ defmodule Phoenix.LiveViewTest.ClientProxy do
       state
       | views: Map.put(state.views, new_view.topic, new_view),
         pids: Map.put(state.pids, pid, new_view.topic),
-        sessions: Map.put(state.sessions, new_view.token, new_view.topic)
+        sessions: Map.put(state.sessions, new_view.session_token, new_view.topic)
     }
   end
 
@@ -273,7 +274,7 @@ defmodule Phoenix.LiveViewTest.ClientProxy do
 
     %{
       state
-      | sessions: Map.delete(state.sessions, view.token),
+      | sessions: Map.delete(state.sessions, view.session_token),
         views: Map.delete(state.views, view.topic),
         pids: Map.delete(state.pids, view.pid)
     }
@@ -304,7 +305,7 @@ defmodule Phoenix.LiveViewTest.ClientProxy do
 
   defp drop_all_views(state, reason) do
     Enum.reduce(state.views, state, fn {_topic, view}, acc ->
-      drop_view_by_session(acc, view.token, reason)
+      drop_view_by_session(acc, view.session_token, reason)
     end)
   end
 
@@ -314,7 +315,7 @@ defmodule Phoenix.LiveViewTest.ClientProxy do
     new_state =
       %{state | views: Map.update!(state.views, topic, fn _ -> new_view end)}
 
-    detect_added_or_removed_children(new_state, new_view.token)
+    detect_added_or_removed_children(new_state, new_view.session_token)
   end
 
   defp detect_added_or_removed_children(state, token) do
@@ -334,17 +335,17 @@ defmodule Phoenix.LiveViewTest.ClientProxy do
       view.rendered
       |> DOM.render_diff()
       |> DOM.find_sessions()
-      |> Enum.reduce(pruned_state, fn session, acc ->
+      |> Enum.reduce(pruned_state, fn {session, static}, acc ->
         case fetch_view_by_session(acc, session) do
           {:ok, _view} -> put_child(acc, view, session)
           :error ->
-            child_view = View.build_child(view, token: session)
+            child_view = View.build_child(view, session_token: session, static_token: static)
             case mount_view(acc, child_view, acc.timeout) do
               {:ok, pid, rendered} ->
                 acc
                 |> put_view(child_view, pid, rendered)
-                |> put_child(view, child_view.token)
-                |> do_detect_added_or_removed_children(child_view.token)
+                |> put_child(view, child_view.session_token)
+                |> do_detect_added_or_removed_children(child_view.session_token)
 
               {:error, %{redirect: to}} ->
                 throw({:stop, {:redirect, child_view, to}, acc})

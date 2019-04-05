@@ -12,12 +12,13 @@ defmodule Phoenix.LiveViewTest.DOMTest do
   <div conn id="456"
       data-phx-parent-id="456"
       data-phx-view="789"
-      data-phx-session="SESSION2"></div>
+      data-phx-session="SESSION2"
+      data-phx-static="STATIC2"></div>
   <h1>bottom</h1>
   """
 
   test "finds session given html" do
-    assert DOM.find_sessions(@html) == ["SESSION1", "SESSION2"]
+    assert DOM.find_sessions(@html) == [{"SESSION1", nil}, {"SESSION2", "STATIC2"}]
     assert DOM.find_sessions("none") == []
   end
 
@@ -31,7 +32,8 @@ defmodule Phoenix.LiveViewTest.DOMTest do
     <div conn id="456"
         data-phx-parent-id="456"
         data-phx-view="789"
-        data-phx-session="SESSION2"></div>
+        data-phx-session="SESSION2"
+        data-phx-static="STATIC2"></div>
     <h1>bottom</h1>
     """
 

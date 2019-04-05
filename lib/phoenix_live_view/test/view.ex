@@ -2,7 +2,8 @@ defmodule Phoenix.LiveViewTest.View do
   @moduledoc false
   alias Phoenix.LiveViewTest.View
 
-  defstruct token: nil,
+  defstruct session_token: nil,
+            static_token: nil,
             module: nil,
             endpoint: nil,
             pid: :static,

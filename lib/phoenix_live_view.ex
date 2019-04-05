@@ -543,9 +543,7 @@ defmodule Phoenix.LiveView do
   end
 
   defp do_live_render(%Plug.Conn{} = conn, view, opts) do
-    endpoint = Phoenix.Controller.endpoint_module(conn)
-
-    case LiveView.View.static_render(endpoint, view, opts) do
+    case LiveView.View.static_render(conn, view, opts) do
       {:ok, content} ->
         content
 
@@ -556,6 +554,7 @@ defmodule Phoenix.LiveView do
         """
     end
   end
+
   defp do_live_render(%Socket{} = parent, view, opts) do
     case LiveView.View.nested_static_render(parent, view, opts) do
       {:ok, content} -> content
@@ -592,6 +591,21 @@ defmodule Phoenix.LiveView do
   """
   def connected?(%Socket{} = socket) do
     LiveView.View.connected?(socket)
+  end
+
+  @doc """
+  TODO
+  """
+  def assign_new(%Socket{} = socket, key, func) when is_function(func, 0) do
+    case Map.fetch(socket.private.parent_assigns, key) do
+      {:ok, val} -> do_assign_new(socket, key, val)
+      :error -> do_assign(socket, key, func.())
+    end
+  end
+
+  defp do_assign_new(socket, key, val) do
+    new_private = update_in(socket.private, [:assigned_new], fn keys -> [key | keys] end)
+    do_assign(%Socket{socket | private: new_private}, key, val)
   end
 
   @doc """
