@@ -388,6 +388,11 @@ export class Rendered {
  *         }
  *       }
  *     }
+ * @param {Function} [opts.handleBeforeUnload] - The optional function to provide a callback handling beforeunload
+ * event from window. it requires returning boolean. false will signal liveview not to set unloaded flag.
+ *
+ *     (event) => {event.preventDefault(); e.returnValue = ''; return false}
+
 */
 export class LiveSocket {
   constructor(url, phxSocket, opts = {}){
@@ -421,14 +426,25 @@ export class LiveSocket {
     this.loaderTimeout = opts.loaderTimeout || LOADER_TIMEOUT
     this.boundTopLevelEvents = false
     this.domCallbacks = opts.dom || {onBeforeElUpdated: closure()}
-    window.addEventListener("unload", e => {
-      this.unloaded = true
-    })
+    this.handleBeforeUnload = opts.handleBeforeUnload || (() => true)
+
     this.socket.onOpen(() => {
       if(this.isUnloaded()){
         // reload page if being restored from back/forward cache and browser does not emit "pageshow"
         window.location.reload()
       }
+      this.unloaded = false
+    })
+    // we need to use beforeunload becasue in Firefox, websocket close event is emitted earlier than window unload
+    // event. Without setting unloaded flag here, displayError will invoked during redirect
+    window.addEventListener("beforeunload", e => {
+      if (this.handleBeforeUnload(e)) {
+        this.unloaded = true
+      }
+    })
+
+    window.addEventListener("unload", e => {
+      this.unloaded = true
     })
   }
 
