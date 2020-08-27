@@ -687,6 +687,7 @@ export class Rendered {
 export class LiveSocket {
   constructor(url, phxSocket, opts = {}){
     this.unloaded = false
+    this.unloading = false
     if(!phxSocket || phxSocket.constructor.name === "Object"){
       throw new Error(`
       a phoenix Socket must be provided as the second argument to the LiveSocket constructor. For example:
@@ -716,7 +717,15 @@ export class LiveSocket {
     this.uploaders = opts.uploaders || {}
     this.loaderTimeout = opts.loaderTimeout || LOADER_TIMEOUT
     this.boundTopLevelEvents = false
-    this.domCallbacks = Object.assign({onNodeAdded: closure(), onBeforeElUpdated: closure()}, opts.dom || {})
+    this.domCallbacks = opts.dom || {onBeforeElUpdated: closure()}
+    // we need to use beforeunload becasue in Firefox, websocket close event is emitted earlier than window unload
+    // event. Without setting unloading flag here, displayError will invoked during redirect
+    // Note that this will cause an issue where no ui error state shown up if the websocket connection actualyl drop after
+    // the page unload is aborted(either user trigger stop loading the page or there is other part of
+    // the code that use beforeunload to abort the page unload).
+    window.addEventListener("beforeunload", e => {
+      this.unloading = true
+    })
     window.addEventListener("unload", e => {
       this.unloaded = true
     })
@@ -860,6 +869,8 @@ export class LiveSocket {
   }
 
   isUnloaded(){ return this.unloaded }
+
+  isUnloading(){ return this.unloading }
 
   isConnected(){ return this.socket.isConnected() }
 
@@ -2486,7 +2497,7 @@ export class View {
   onError(reason){
     this.onClose(reason)
     this.log("error", () => ["view crashed", reason])
-    if(!this.liveSocket.isUnloaded()){ this.displayError() }
+    if(!this.liveSocket.isUnloaded() && !this.liveSocket.isUnloading()){ this.displayError() }
   }
 
   displayError(){
